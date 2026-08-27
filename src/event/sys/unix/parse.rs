@@ -280,10 +280,9 @@ fn parse_csi_keyboard_enhancement_flags(buffer: &[u8]) -> io::Result<Option<Inte
     if bits & 8 != 0 {
         flags |= KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
     }
-    // *Note*: this is not yet supported by crossterm.
-    // if bits & 16 != 0 {
-    //     flags |= KeyboardEnhancementFlags::REPORT_ASSOCIATED_TEXT;
-    // }
+    if bits & 16 != 0 {
+        flags |= KeyboardEnhancementFlags::REPORT_ASSOCIATED_TEXT;
+    }
 
     Ok(Some(InternalEvent::KeyboardEnhancementFlags(flags)))
 }
@@ -606,12 +605,35 @@ pub(crate) fn parse_csi_u_encoded_key_code(buffer: &[u8]) -> io::Result<Option<I
         }
     }
 
-    let input_event = Event::Key(KeyEvent::new_with_kind_and_state(
+    let key_event = KeyEvent::new_with_kind_and_state(
         keycode,
         modifiers,
         kind,
         state_from_keycode | state_from_modifiers,
-    ));
+    );
+    let associated_text = split
+        .next()
+        .map(|codepoints| {
+            codepoints
+                .split(':')
+                .filter(|codepoint| !codepoint.is_empty())
+                .map(|codepoint| {
+                    codepoint
+                        .parse::<u32>()
+                        .map_err(|_| could_not_parse_event_error())
+                        .and_then(|codepoint| {
+                            char::from_u32(codepoint).ok_or_else(could_not_parse_event_error)
+                        })
+                })
+                .collect::<io::Result<String>>()
+        })
+        .transpose()?
+        .filter(|text| !text.is_empty());
+    let input_event = if let Some(text) = associated_text {
+        Event::KeyWithText(key_event, text)
+    } else {
+        Event::Key(key_event)
+    };
 
     Ok(Some(InternalEvent::Event(input_event)))
 }
@@ -1317,6 +1339,13 @@ mod tests {
                 KeyCode::Char('a'),
                 KeyModifiers::ALT | KeyModifiers::CONTROL
             )))),
+        );
+        assert_eq!(
+            parse_csi_u_encoded_key_code(b"\x1B[103;3:1;169u").unwrap(),
+            Some(InternalEvent::Event(Event::KeyWithText(
+                KeyEvent::new(KeyCode::Char('g'), KeyModifiers::ALT),
+                "©".to_string(),
+            ))),
         );
     }
 
