@@ -280,10 +280,9 @@ fn parse_csi_keyboard_enhancement_flags(buffer: &[u8]) -> io::Result<Option<Inte
     if bits & 8 != 0 {
         flags |= KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
     }
-    // *Note*: this is not yet supported by crossterm.
-    // if bits & 16 != 0 {
-    //     flags |= KeyboardEnhancementFlags::REPORT_ASSOCIATED_TEXT;
-    // }
+    if bits & 16 != 0 {
+        flags |= KeyboardEnhancementFlags::REPORT_ASSOCIATED_TEXT;
+    }
 
     Ok(Some(InternalEvent::KeyboardEnhancementFlags(flags)))
 }
@@ -605,12 +604,35 @@ pub(crate) fn parse_csi_u_encoded_key_code(buffer: &[u8]) -> io::Result<Option<I
         }
     }
 
-    let input_event = Event::Key(KeyEvent::new_with_kind_and_state(
+    let key_event = KeyEvent::new_with_kind_and_state(
         keycode,
         modifiers,
         kind,
         state_from_keycode | state_from_modifiers,
-    ));
+    );
+    let associated_text = split
+        .next()
+        .map(|codepoints| {
+            codepoints
+                .split(':')
+                .filter(|codepoint| !codepoint.is_empty())
+                .map(|codepoint| {
+                    codepoint
+                        .parse::<u32>()
+                        .map_err(|_| could_not_parse_event_error())
+                        .and_then(|codepoint| {
+                            char::from_u32(codepoint).ok_or_else(could_not_parse_event_error)
+                        })
+                })
+                .collect::<io::Result<String>>()
+        })
+        .transpose()?
+        .filter(|text| !text.is_empty());
+    let input_event = if let Some(text) = associated_text {
+        Event::KeyWithText(key_event, text)
+    } else {
+        Event::Key(key_event)
+    };
 
     Ok(Some(InternalEvent::Event(input_event)))
 }
@@ -1317,6 +1339,62 @@ mod tests {
                 KeyModifiers::ALT | KeyModifiers::CONTROL
             )))),
         );
+        assert_eq!(
+            parse_csi_u_encoded_key_code(b"\x1B[103;3:1;169u").unwrap(),
+            Some(InternalEvent::Event(Event::KeyWithText(
+                KeyEvent::new(KeyCode::Char('g'), KeyModifiers::ALT),
+                "©".to_string(),
+            ))),
+        );
+    }
+
+    #[test]
+    fn test_parse_csi_u_associated_text() {
+        assert_eq!(
+            parse_csi_u_encoded_key_code(b"\x1B[103;3:1;169:8482u").unwrap(),
+            Some(InternalEvent::Event(Event::KeyWithText(
+                KeyEvent::new(KeyCode::Char('g'), KeyModifiers::ALT),
+                "©™".to_owned(),
+            ))),
+        );
+        assert_eq!(
+            parse_csi_u_encoded_key_code(b"\x1B[97:65;2:1;65u").unwrap(),
+            Some(InternalEvent::Event(Event::KeyWithText(
+                KeyEvent::new(KeyCode::Char('A'), KeyModifiers::NONE),
+                "A".to_owned(),
+            ))),
+        );
+        assert_eq!(
+            parse_csi_u_encoded_key_code(b"\x1B[97;1:2;128512u").unwrap(),
+            Some(InternalEvent::Event(Event::KeyWithText(
+                KeyEvent::new_with_kind(
+                    KeyCode::Char('a'),
+                    KeyModifiers::NONE,
+                    KeyEventKind::Repeat,
+                ),
+                "😀".to_owned(),
+            ))),
+        );
+        assert_eq!(
+            parse_csi_u_encoded_key_code(b"\x1B[97;1:3;97u").unwrap(),
+            Some(InternalEvent::Event(Event::KeyWithText(
+                KeyEvent::new_with_kind(
+                    KeyCode::Char('a'),
+                    KeyModifiers::NONE,
+                    KeyEventKind::Release,
+                ),
+                "a".to_owned(),
+            ))),
+        );
+        assert_eq!(
+            parse_csi_u_encoded_key_code(b"\x1B[97;1:1;u").unwrap(),
+            Some(InternalEvent::Event(Event::Key(KeyEvent::new(
+                KeyCode::Char('a'),
+                KeyModifiers::NONE,
+            )))),
+        );
+        assert!(parse_csi_u_encoded_key_code(b"\x1B[97;1:1;invalidu").is_err());
+        assert!(parse_csi_u_encoded_key_code(b"\x1B[97;1:1;1114112u").is_err());
     }
 
     #[test]

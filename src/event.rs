@@ -50,6 +50,7 @@
 //!             Event::FocusGained => println!("FocusGained"),
 //!             Event::FocusLost => println!("FocusLost"),
 //!             Event::Key(event) => println!("{:?}", event),
+//!             Event::KeyWithText(event, text) => println!("{:?}: {:?}", event, text),
 //!             Event::Mouse(event) => println!("{:?}", event),
 //!             #[cfg(feature = "bracketed-paste")]
 //!             Event::Paste(data) => println!("{:?}", data),
@@ -96,6 +97,7 @@
 //!                 Event::FocusGained => println!("FocusGained"),
 //!                 Event::FocusLost => println!("FocusLost"),
 //!                 Event::Key(event) => println!("{:?}", event),
+//!                 Event::KeyWithText(event, text) => println!("{:?}: {:?}", event, text),
 //!                 Event::Mouse(event) => println!("{:?}", event),
 //!                 #[cfg(feature = "bracketed-paste")]
 //!                 Event::Paste(data) => println!("Pasted {:?}", data),
@@ -286,10 +288,8 @@ bitflags! {
         /// Represent all keyboard events as CSI-u sequences. This is required to get repeat/release
         /// events for plain-text keys.
         const REPORT_ALL_KEYS_AS_ESCAPE_CODES = 0b0000_1000;
-        // Send the Unicode codepoint as well as the keycode.
-        //
-        // *Note*: this is not yet supported by crossterm.
-        // const REPORT_ASSOCIATED_TEXT = 0b0001_0000;
+        /// Send committed Unicode text as well as the key identity.
+        const REPORT_ASSOCIATED_TEXT = 0b0001_0000;
     }
 }
 
@@ -528,7 +528,6 @@ impl Command for PopKeyboardEnhancementFlags {
 /// Represents an event.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "derive-more", derive(IsVariant))]
-#[cfg_attr(not(feature = "bracketed-paste"), derive(Copy))]
 #[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Clone, Hash)]
 pub enum Event {
     /// The terminal gained focus
@@ -537,6 +536,8 @@ pub enum Event {
     FocusLost,
     /// A single key event with additional pressed modifiers.
     Key(KeyEvent),
+    /// A key event plus committed text reported by Kitty's associated-text mode.
+    KeyWithText(KeyEvent, String),
     /// A single mouse event with additional pressed modifiers.
     Mouse(MouseEvent),
     /// A string that was pasted into the terminal. Only emitted if bracketed paste has been
@@ -574,7 +575,13 @@ impl Event {
             Event::Key(KeyEvent {
                 kind: KeyEventKind::Press,
                 ..
-            })
+            }) | Event::KeyWithText(
+                KeyEvent {
+                    kind: KeyEventKind::Press,
+                    ..
+                },
+                _
+            )
         )
     }
 
@@ -586,7 +593,13 @@ impl Event {
             Event::Key(KeyEvent {
                 kind: KeyEventKind::Release,
                 ..
-            })
+            }) | Event::KeyWithText(
+                KeyEvent {
+                    kind: KeyEventKind::Release,
+                    ..
+                },
+                _
+            )
         )
     }
 
@@ -598,7 +611,13 @@ impl Event {
             Event::Key(KeyEvent {
                 kind: KeyEventKind::Repeat,
                 ..
-            })
+            }) | Event::KeyWithText(
+                KeyEvent {
+                    kind: KeyEventKind::Repeat,
+                    ..
+                },
+                _
+            )
         )
     }
 
@@ -621,7 +640,7 @@ impl Event {
     #[inline]
     pub fn as_key_event(&self) -> Option<KeyEvent> {
         match self {
-            Event::Key(event) => Some(*event),
+            Event::Key(event) | Event::KeyWithText(event, _) => Some(*event),
             _ => None,
         }
     }
@@ -648,7 +667,7 @@ impl Event {
     #[inline]
     pub fn as_key_press_event(&self) -> Option<KeyEvent> {
         match self {
-            Event::Key(event) if self.is_key_press() => Some(*event),
+            Event::Key(event) | Event::KeyWithText(event, _) if self.is_key_press() => Some(*event),
             _ => None,
         }
     }
@@ -657,7 +676,9 @@ impl Event {
     #[inline]
     pub fn as_key_release_event(&self) -> Option<KeyEvent> {
         match self {
-            Event::Key(event) if self.is_key_release() => Some(*event),
+            Event::Key(event) | Event::KeyWithText(event, _) if self.is_key_release() => {
+                Some(*event)
+            }
             _ => None,
         }
     }
@@ -666,7 +687,9 @@ impl Event {
     #[inline]
     pub fn as_key_repeat_event(&self) -> Option<KeyEvent> {
         match self {
-            Event::Key(event) if self.is_key_repeat() => Some(*event),
+            Event::Key(event) | Event::KeyWithText(event, _) if self.is_key_repeat() => {
+                Some(*event)
+            }
             _ => None,
         }
     }
@@ -1656,6 +1679,12 @@ mod tests {
         assert!(!event.is_key_repeat());
         assert!(!event.is_focus_gained());
 
+        let event = Event::KeyWithText(ESC_PRESSED, "x".to_owned());
+        assert!(event.is_key_with_text());
+        assert!(event.is_key_press());
+        assert!(!event.is_key_release());
+        assert!(!event.is_key_repeat());
+
         let event = Event::Key(ESC_RELEASED);
         assert!(event.is_key());
         assert!(!event.is_key_press());
@@ -1707,6 +1736,12 @@ mod tests {
         assert_eq!(event.as_key_press_event(), None);
         assert_eq!(event.as_key_release_event(), None);
         assert_eq!(event.as_resize_event(), None);
+
+        let event = Event::KeyWithText(ESC_REPEAT, "x".to_owned());
+        assert_eq!(event.as_key_event(), Some(ESC_REPEAT));
+        assert_eq!(event.as_key_repeat_event(), Some(ESC_REPEAT));
+        assert_eq!(event.as_key_press_event(), None);
+        assert_eq!(event.as_key_release_event(), None);
 
         let event = Event::Resize(1, 1);
         assert_eq!(event.as_resize_event(), Some((1, 1)));
