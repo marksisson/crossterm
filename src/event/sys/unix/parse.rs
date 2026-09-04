@@ -776,27 +776,35 @@ pub(crate) fn parse_csi_u_encoded_key_code(buffer: &[u8]) -> io::Result<Option<I
         }
     }
 
-    // When the "report alternate keys" flag is enabled in the Kitty Keyboard Protocol
-    // and the terminal sends a keyboard event containing shift, the sequence will
-    // contain an additional codepoint separated by a ':' character which contains
-    // the shifted character according to the keyboard layout.
+    // When the "report alternate keys" flag is enabled in the Kitty Keyboard Protocol,
+    // the primary key code can be followed by the shifted key and the key at the same
+    // physical position in the standard PC-101 layout. Preserve both values even though
+    // the shifted value continues to replace the primary code for compatibility.
+    let shifted_key_code = codepoints
+        .next()
+        .and_then(|codepoint| codepoint.parse::<u32>().ok())
+        .and_then(char::from_u32)
+        .map(KeyCode::Char);
+    let base_layout_key_code = codepoints
+        .next()
+        .and_then(|codepoint| codepoint.parse::<u32>().ok())
+        .and_then(char::from_u32)
+        .map(KeyCode::Char);
     if modifiers.contains(KeyModifiers::SHIFT) {
-        if let Some(shifted_c) = codepoints
-            .next()
-            .and_then(|codepoint| codepoint.parse::<u32>().ok())
-            .and_then(char::from_u32)
-        {
-            keycode = KeyCode::Char(shifted_c);
+        if let Some(shifted_key_code) = shifted_key_code {
+            keycode = shifted_key_code;
             modifiers.set(KeyModifiers::SHIFT, false);
         }
     }
 
-    let key_event = KeyEvent::new_with_kind_and_state(
+    let mut key_event = KeyEvent::new_with_kind_and_state(
         keycode,
         modifiers,
         kind,
         state_from_keycode | state_from_modifiers,
     );
+    key_event.shifted_key_code = shifted_key_code;
+    key_event.base_layout_key_code = base_layout_key_code;
     let associated_text = split
         .next()
         .map(|codepoints| {
@@ -1551,6 +1559,28 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_csi_u_alternate_key_codes() {
+        assert_eq!(
+            parse_csi_u_encoded_key_code(b"\x1B[101:69:100;2u").unwrap(),
+            Some(InternalEvent::Event(Event::Key(KeyEvent {
+                shifted_key_code: Some(KeyCode::Char('E')),
+                base_layout_key_code: Some(KeyCode::Char('d')),
+                ..KeyEvent::new(KeyCode::Char('E'), KeyModifiers::NONE)
+            }))),
+        );
+        assert_eq!(
+            parse_csi_u_encoded_key_code(b"\x1B[233::101;1:1;233u").unwrap(),
+            Some(InternalEvent::Event(Event::KeyWithText(
+                KeyEvent {
+                    base_layout_key_code: Some(KeyCode::Char('e')),
+                    ..KeyEvent::new(KeyCode::Char('é'), KeyModifiers::NONE)
+                },
+                "é".to_owned(),
+            ))),
+        );
+    }
+
+    #[test]
     fn test_parse_csi_u_associated_text() {
         assert_eq!(
             parse_csi_u_encoded_key_code(b"\x1B[103;3:1;169:8482u").unwrap(),
@@ -1562,7 +1592,10 @@ mod tests {
         assert_eq!(
             parse_csi_u_encoded_key_code(b"\x1B[97:65;2:1;65u").unwrap(),
             Some(InternalEvent::Event(Event::KeyWithText(
-                KeyEvent::new(KeyCode::Char('A'), KeyModifiers::NONE),
+                KeyEvent {
+                    shifted_key_code: Some(KeyCode::Char('A')),
+                    ..KeyEvent::new(KeyCode::Char('A'), KeyModifiers::NONE)
+                },
                 "A".to_owned(),
             ))),
         );
@@ -1812,18 +1845,18 @@ mod tests {
         assert_eq!(
             // A-S-9 is equivalent to A-(
             parse_event(b"\x1B[57:40;4u", false).unwrap(),
-            Some(InternalEvent::Event(Event::Key(KeyEvent::new(
-                KeyCode::Char('('),
-                KeyModifiers::ALT,
-            )))),
+            Some(InternalEvent::Event(Event::Key(KeyEvent {
+                shifted_key_code: Some(KeyCode::Char('(')),
+                ..KeyEvent::new(KeyCode::Char('('), KeyModifiers::ALT)
+            }))),
         );
         assert_eq!(
             // A-S-minus is equivalent to A-_
             parse_event(b"\x1B[45:95;4u", false).unwrap(),
-            Some(InternalEvent::Event(Event::Key(KeyEvent::new(
-                KeyCode::Char('_'),
-                KeyModifiers::ALT,
-            )))),
+            Some(InternalEvent::Event(Event::Key(KeyEvent {
+                shifted_key_code: Some(KeyCode::Char('_')),
+                ..KeyEvent::new(KeyCode::Char('_'), KeyModifiers::ALT)
+            }))),
         );
     }
 
