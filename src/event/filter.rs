@@ -1,4 +1,4 @@
-use crate::event::internal::InternalEvent;
+use crate::event::{Event, TerminalResponse, internal::InternalEvent};
 
 /// Interface for filtering an `InternalEvent`.
 pub(crate) trait Filter: Send + Sync + 'static {
@@ -29,8 +29,11 @@ impl Filter for KeyboardEnhancementFlagsFilter {
         // response but not KeyboardEnhancementFlags, the terminal does not support
         // progressive keyboard enhancement.
         matches!(
-            *event,
-            InternalEvent::KeyboardEnhancementFlags(_) | InternalEvent::PrimaryDeviceAttributes
+            event,
+            InternalEvent::KeyboardEnhancementFlags(_)
+                | InternalEvent::Event(Event::TerminalResponse(
+                    TerminalResponse::PrimaryDeviceAttributes { .. }
+                ))
         )
     }
 }
@@ -42,7 +45,21 @@ pub(crate) struct PrimaryDeviceAttributesFilter;
 #[cfg(unix)]
 impl Filter for PrimaryDeviceAttributesFilter {
     fn eval(&self, event: &InternalEvent) -> bool {
-        matches!(*event, InternalEvent::PrimaryDeviceAttributes)
+        matches!(
+            event,
+            InternalEvent::Event(Event::TerminalResponse(
+                TerminalResponse::PrimaryDeviceAttributes { .. }
+            ))
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TerminalResponseFilter;
+
+impl Filter for TerminalResponseFilter {
+    fn eval(&self, event: &InternalEvent) -> bool {
+        matches!(event, InternalEvent::Event(Event::TerminalResponse(_)))
     }
 }
 
@@ -65,8 +82,9 @@ impl Filter for EventFilter {
 #[cfg(unix)]
 mod tests {
     use super::{
-        super::Event, CursorPositionFilter, EventFilter, Filter, InternalEvent,
-        KeyboardEnhancementFlagsFilter, PrimaryDeviceAttributesFilter,
+        super::{Event, TerminalResponse},
+        CursorPositionFilter, EventFilter, Filter, InternalEvent, KeyboardEnhancementFlagsFilter,
+        PrimaryDeviceAttributesFilter, TerminalResponseFilter,
     };
 
     #[derive(Debug, Clone)]
@@ -92,13 +110,34 @@ mod tests {
                 crate::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
             ))
         );
-        assert!(KeyboardEnhancementFlagsFilter.eval(&InternalEvent::PrimaryDeviceAttributes));
+        assert!(KeyboardEnhancementFlagsFilter.eval(&InternalEvent::Event(
+            Event::TerminalResponse(TerminalResponse::PrimaryDeviceAttributes {
+                class: 62,
+                attributes: vec![4],
+            })
+        )));
     }
 
     #[test]
     fn test_primary_device_attributes_filter_filters_primary_device_attributes() {
         assert!(!PrimaryDeviceAttributesFilter.eval(&InternalEvent::Event(Event::Resize(10, 10))));
-        assert!(PrimaryDeviceAttributesFilter.eval(&InternalEvent::PrimaryDeviceAttributes));
+        assert!(PrimaryDeviceAttributesFilter.eval(&InternalEvent::Event(
+            Event::TerminalResponse(TerminalResponse::PrimaryDeviceAttributes {
+                class: 62,
+                attributes: vec![4],
+            })
+        )));
+    }
+
+    #[test]
+    fn test_terminal_response_filter_filters_terminal_responses() {
+        let response =
+            InternalEvent::Event(Event::TerminalResponse(TerminalResponse::DecModeStatus {
+                mode: 2026,
+                status: 2,
+            }));
+        assert!(TerminalResponseFilter.eval(&response));
+        assert!(!TerminalResponseFilter.eval(&InternalEvent::Event(Event::Resize(10, 10))));
     }
 
     #[test]

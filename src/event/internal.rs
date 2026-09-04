@@ -75,7 +75,4 @@ pub(crate) enum InternalEvent {
     /// The progressive keyboard enhancement flags enabled by the terminal.
     #[cfg(unix)]
     KeyboardEnhancementFlags(KeyboardEnhancementFlags),
-    /// Attributes and architectural class of the terminal.
-    #[cfg(unix)]
-    PrimaryDeviceAttributes,
 }

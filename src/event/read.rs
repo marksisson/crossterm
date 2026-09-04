@@ -147,7 +147,10 @@ mod tests {
 
     #[cfg(unix)]
     use super::super::filter::CursorPositionFilter;
-    use super::{super::Event, EventSource, Filter, InternalEvent, InternalEventReader};
+    use super::{
+        super::{Event, TerminalResponse, filter::TerminalResponseFilter},
+        EventSource, Filter, InternalEvent, InternalEventReader,
+    };
 
     #[derive(Debug, Clone)]
     pub(crate) struct InternalEventFilter;
@@ -269,6 +272,24 @@ mod tests {
             reader.try_read(&InternalEventFilter).unwrap(),
             SKIPPED_EVENT
         );
+    }
+
+    #[test]
+    fn test_terminal_response_read_preserves_unrelated_input() {
+        let input = InternalEvent::Event(Event::Resize(10, 10));
+        let response =
+            InternalEvent::Event(Event::TerminalResponse(TerminalResponse::DecModeStatus {
+                mode: 2026,
+                status: 2,
+            }));
+        let mut reader = InternalEventReader {
+            events: vec![input.clone(), response.clone()].into(),
+            source: None,
+            skipped_events: Vec::with_capacity(32),
+        };
+
+        assert_eq!(reader.read(&TerminalResponseFilter).unwrap(), response);
+        assert_eq!(reader.read(&InternalEventFilter).unwrap(), input);
     }
 
     #[test]

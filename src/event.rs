@@ -55,6 +55,7 @@
 //!             #[cfg(feature = "bracketed-paste")]
 //!             Event::Paste(data) => println!("{:?}", data),
 //!             Event::Resize(width, height) => println!("New size {}x{}", width, height),
+//!             Event::TerminalResponse(response) => println!("Terminal response: {:?}", response),
 //!         }
 //!     }
 //!     execute!(
@@ -102,6 +103,7 @@
 //!                 #[cfg(feature = "bracketed-paste")]
 //!                 Event::Paste(data) => println!("Pasted {:?}", data),
 //!                 Event::Resize(width, height) => println!("New size {}x{}", width, height),
+//!                 Event::TerminalResponse(response) => println!("Terminal response: {:?}", response),
 //!             }
 //!         } else {
 //!             // Timeout expired and no `Event` is available
@@ -136,7 +138,10 @@ pub use stream::EventStream;
 
 use crate::{
     Command, csi,
-    event::{filter::EventFilter, internal::InternalEvent},
+    event::{
+        filter::{EventFilter, TerminalResponseFilter},
+        internal::InternalEvent,
+    },
 };
 use std::fmt::{self, Display};
 use std::time::Duration;
@@ -232,6 +237,22 @@ pub fn read() -> std::io::Result<Event> {
     match internal::read(&EventFilter)? {
         InternalEvent::Event(event) => Ok(event),
         #[cfg(unix)]
+        _ => unreachable!(),
+    }
+}
+
+/// Waits up to `timeout` for one terminal capability or status response.
+///
+/// Keyboard, pointer, focus, paste, and resize events encountered while waiting
+/// remain queued for the next [`read`] call. Like [`poll`] and [`read`], this
+/// function must not be called concurrently with another event reader or an
+/// `EventStream`.
+pub fn read_terminal_response(timeout: Duration) -> std::io::Result<Option<TerminalResponse>> {
+    if !internal::poll(Some(timeout), &TerminalResponseFilter)? {
+        return Ok(None);
+    }
+    match internal::read(&TerminalResponseFilter)? {
+        InternalEvent::Event(Event::TerminalResponse(response)) => Ok(Some(response)),
         _ => unreachable!(),
     }
 }
@@ -525,6 +546,64 @@ impl Command for PopKeyboardEnhancementFlags {
     }
 }
 
+/// A response to a terminal capability or status query.
+///
+/// Responses are exposed through [`Event::TerminalResponse`] so callers can send
+/// several queries through the terminal and consume their replies with the same
+/// event reader used for keyboard, pointer, focus, paste, and resize input.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Clone, Hash)]
+pub enum TerminalResponse {
+    /// Primary device attributes (`DA1`).
+    PrimaryDeviceAttributes {
+        /// The terminal's architectural class.
+        class: u16,
+        /// Optional terminal capability attributes.
+        attributes: Vec<u16>,
+    },
+    /// DEC private-mode status (`DECRPM`).
+    DecModeStatus {
+        /// The queried private mode.
+        mode: u16,
+        /// The raw DEC mode status value.
+        status: u16,
+    },
+    /// XTerm Set or Get Graphics Attributes (`XTSMGRAPHICS`).
+    XtSmGraphics {
+        /// The queried graphics item.
+        item: u16,
+        /// The raw response status.
+        status: u16,
+        /// Item-specific response values.
+        values: Vec<u32>,
+    },
+    /// Text-area dimensions in physical pixels.
+    TextAreaSizePixels {
+        /// Width in pixels.
+        width: u32,
+        /// Height in pixels.
+        height: u32,
+    },
+    /// Character-cell dimensions in physical pixels.
+    CellSizePixels {
+        /// Width in pixels.
+        width: u32,
+        /// Height in pixels.
+        height: u32,
+    },
+    /// Kitty graphics protocol query response.
+    KittyGraphics {
+        /// Image ID (`i`) when supplied by the terminal.
+        image_id: Option<u32>,
+        /// Image number (`I`) when supplied by the terminal.
+        image_number: Option<u32>,
+        /// Placement ID (`p`) when supplied by the terminal.
+        placement_id: Option<u32>,
+        /// The terminal's bounded status message.
+        message: String,
+    },
+}
+
 /// Represents an event.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "derive-more", derive(IsVariant))]
@@ -547,6 +626,8 @@ pub enum Event {
     /// A resize event with new dimensions after resize (columns, rows).
     /// **Note** that resize events can occur in batches.
     Resize(u16, u16),
+    /// A response to a terminal capability or status query.
+    TerminalResponse(TerminalResponse),
 }
 
 impl Event {

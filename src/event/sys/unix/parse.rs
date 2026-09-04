@@ -2,7 +2,7 @@ use std::io;
 
 use crate::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, KeyboardEnhancementFlags,
-    MediaKeyCode, ModifierKeyCode, MouseButton, MouseEvent, MouseEventKind,
+    MediaKeyCode, ModifierKeyCode, MouseButton, MouseEvent, MouseEventKind, TerminalResponse,
 };
 
 use crate::event::internal::InternalEvent;
@@ -23,12 +23,113 @@ fn could_not_parse_event_error() -> io::Error {
     io::Error::other("Could not parse an event.")
 }
 
+const MAX_TERMINAL_RESPONSE_BYTES: usize = 1_024;
+const MAX_TERMINAL_RESPONSE_PARAMETERS: usize = 32;
+const MAX_KITTY_STATUS_BYTES: usize = 256;
+
+fn terminal_response(response: TerminalResponse) -> Option<InternalEvent> {
+    Some(InternalEvent::Event(Event::TerminalResponse(response)))
+}
+
+fn parse_u16_parameters(bytes: &[u8]) -> io::Result<Vec<u16>> {
+    let text = std::str::from_utf8(bytes).map_err(|_| could_not_parse_event_error())?;
+    let mut values = Vec::new();
+    for value in text.split(';') {
+        if value.is_empty() || values.len() == MAX_TERMINAL_RESPONSE_PARAMETERS {
+            return Err(could_not_parse_event_error());
+        }
+        values.push(
+            value
+                .parse::<u16>()
+                .map_err(|_| could_not_parse_event_error())?,
+        );
+    }
+    Ok(values)
+}
+
+fn parse_u32_parameters(bytes: &[u8]) -> io::Result<Vec<u32>> {
+    let text = std::str::from_utf8(bytes).map_err(|_| could_not_parse_event_error())?;
+    let mut values = Vec::new();
+    for value in text.split(';') {
+        if value.is_empty() || values.len() == MAX_TERMINAL_RESPONSE_PARAMETERS {
+            return Err(could_not_parse_event_error());
+        }
+        values.push(
+            value
+                .parse::<u32>()
+                .map_err(|_| could_not_parse_event_error())?,
+        );
+    }
+    Ok(values)
+}
+
+fn parse_kitty_graphics_response(buffer: &[u8]) -> io::Result<Option<InternalEvent>> {
+    assert!(buffer.starts_with(b"\x1B_G"));
+
+    if buffer.len() > MAX_TERMINAL_RESPONSE_BYTES {
+        return Err(could_not_parse_event_error());
+    }
+    if !buffer.ends_with(b"\x1B\\") {
+        return Ok(None);
+    }
+
+    let body = &buffer[3..buffer.len() - 2];
+    let separator = body
+        .iter()
+        .position(|byte| *byte == b';')
+        .ok_or_else(could_not_parse_event_error)?;
+    let control =
+        std::str::from_utf8(&body[..separator]).map_err(|_| could_not_parse_event_error())?;
+    let status = &body[separator + 1..];
+    if status.is_empty() || status.len() > MAX_KITTY_STATUS_BYTES {
+        return Err(could_not_parse_event_error());
+    }
+    let message = std::str::from_utf8(status)
+        .map_err(|_| could_not_parse_event_error())?
+        .to_owned();
+
+    let mut image_id = None;
+    let mut image_number = None;
+    let mut placement_id = None;
+    for field in control.split(',') {
+        let Some((key, value)) = field.split_once('=') else {
+            return Err(could_not_parse_event_error());
+        };
+        let parsed = value
+            .parse::<u32>()
+            .map_err(|_| could_not_parse_event_error())?;
+        match key {
+            "i" => image_id = Some(parsed),
+            "I" => image_number = Some(parsed),
+            "p" => placement_id = Some(parsed),
+            _ => {}
+        }
+    }
+    if image_id.is_none() && image_number.is_none() {
+        return Err(could_not_parse_event_error());
+    }
+
+    Ok(terminal_response(TerminalResponse::KittyGraphics {
+        image_id,
+        image_number,
+        placement_id,
+        message,
+    }))
+}
+
 pub(crate) fn parse_event(
     buffer: &[u8],
     input_available: bool,
 ) -> io::Result<Option<InternalEvent>> {
     if buffer.is_empty() {
         return Ok(None);
+    }
+
+    if b"\x1B_G".starts_with(buffer) && buffer.len() > 1 && input_available {
+        return Ok(None);
+    }
+    if buffer.starts_with(b"\x1B_G") {
+        return parse_kitty_graphics_response(buffer);
     }
 
     match buffer[0] {
@@ -180,6 +281,8 @@ pub(crate) fn parse_csi(buffer: &[u8]) -> io::Result<Option<InternalEvent>> {
         b'?' => match buffer[buffer.len() - 1] {
             b'u' => return parse_csi_keyboard_enhancement_flags(buffer),
             b'c' => return parse_csi_primary_device_attributes(buffer),
+            b'S' => return parse_csi_xtsmgraphics(buffer),
+            b'y' if buffer.ends_with(b"$y") => return parse_csi_dec_mode_status(buffer),
             _ => None,
         },
         b'0'..=b'9' => {
@@ -202,6 +305,7 @@ pub(crate) fn parse_csi(buffer: &[u8]) -> io::Result<Option<InternalEvent>> {
                         b'~' => return parse_csi_special_key_code(buffer),
                         b'u' => return parse_csi_u_encoded_key_code(buffer),
                         b'R' => return parse_csi_cursor_position(buffer),
+                        b't' => return parse_csi_window_size_response(buffer),
                         _ => return parse_csi_modifier_key_code(buffer),
                     }
                 }
@@ -291,15 +395,93 @@ fn parse_csi_keyboard_enhancement_flags(buffer: &[u8]) -> io::Result<Option<Inte
 }
 
 fn parse_csi_primary_device_attributes(buffer: &[u8]) -> io::Result<Option<InternalEvent>> {
-    // ESC [ 64 ; attr1 ; attr2 ; ... ; attrn ; c
+    // ESC [ ? class ; attr1 ; attr2 ; ... ; attrn c
     assert!(buffer.starts_with(b"\x1B[?"));
     assert!(buffer.ends_with(b"c"));
 
-    // This is a stub for parsing the primary device attributes. This response is not
-    // exposed in the crossterm API so we don't need to parse the individual attributes yet.
-    // See <https://vt100.net/docs/vt510-rm/DA1.html>
+    if buffer.len() > MAX_TERMINAL_RESPONSE_BYTES {
+        return Err(could_not_parse_event_error());
+    }
+    let mut parameters = parse_u16_parameters(&buffer[3..buffer.len() - 1])?;
+    if parameters.is_empty() {
+        return Err(could_not_parse_event_error());
+    }
+    let class = parameters.remove(0);
 
-    Ok(Some(InternalEvent::PrimaryDeviceAttributes))
+    Ok(terminal_response(
+        TerminalResponse::PrimaryDeviceAttributes {
+            class,
+            attributes: parameters,
+        },
+    ))
+}
+
+fn parse_csi_dec_mode_status(buffer: &[u8]) -> io::Result<Option<InternalEvent>> {
+    // ESC [ ? mode ; status $ y
+    assert!(buffer.starts_with(b"\x1B[?"));
+    assert!(buffer.ends_with(b"$y"));
+
+    if buffer.len() > MAX_TERMINAL_RESPONSE_BYTES {
+        return Err(could_not_parse_event_error());
+    }
+    let parameters = parse_u16_parameters(&buffer[3..buffer.len() - 2])?;
+    if parameters.len() != 2 {
+        return Err(could_not_parse_event_error());
+    }
+
+    Ok(terminal_response(TerminalResponse::DecModeStatus {
+        mode: parameters[0],
+        status: parameters[1],
+    }))
+}
+
+fn parse_csi_xtsmgraphics(buffer: &[u8]) -> io::Result<Option<InternalEvent>> {
+    // ESC [ ? item ; status ; value1 ; ... ; valuen S
+    assert!(buffer.starts_with(b"\x1B[?"));
+    assert!(buffer.ends_with(b"S"));
+
+    if buffer.len() > MAX_TERMINAL_RESPONSE_BYTES {
+        return Err(could_not_parse_event_error());
+    }
+    let mut parameters = parse_u32_parameters(&buffer[3..buffer.len() - 1])?;
+    if parameters.len() < 2 || parameters[0] > u16::MAX as u32 || parameters[1] > u16::MAX as u32 {
+        return Err(could_not_parse_event_error());
+    }
+    let item = parameters.remove(0) as u16;
+    let status = parameters.remove(0) as u16;
+
+    Ok(terminal_response(TerminalResponse::XtSmGraphics {
+        item,
+        status,
+        values: parameters,
+    }))
+}
+
+fn parse_csi_window_size_response(buffer: &[u8]) -> io::Result<Option<InternalEvent>> {
+    // ESC [ 4 ; height ; width t   (text area)
+    // ESC [ 6 ; height ; width t   (cell)
+    assert!(buffer.starts_with(b"\x1B["));
+    assert!(buffer.ends_with(b"t"));
+
+    if buffer.len() > MAX_TERMINAL_RESPONSE_BYTES {
+        return Err(could_not_parse_event_error());
+    }
+    let parameters = parse_u32_parameters(&buffer[2..buffer.len() - 1])?;
+    if parameters.len() != 3 || parameters[1] == 0 || parameters[2] == 0 {
+        return Err(could_not_parse_event_error());
+    }
+    let response = match parameters[0] {
+        4 => TerminalResponse::TextAreaSizePixels {
+            width: parameters[2],
+            height: parameters[1],
+        },
+        6 => TerminalResponse::CellSizePixels {
+            width: parameters[2],
+            height: parameters[1],
+        },
+        _ => return Err(could_not_parse_event_error()),
+    };
+    Ok(terminal_response(response))
 }
 
 fn parse_modifiers(mask: u8) -> KeyModifiers {
@@ -1681,5 +1863,91 @@ mod tests {
                 KeyEventKind::Release,
             )))),
         );
+    }
+
+    #[test]
+    fn test_parse_primary_device_attributes_response() {
+        assert_eq!(
+            parse_event(b"\x1B[?62;4;22c", false).unwrap(),
+            terminal_response(TerminalResponse::PrimaryDeviceAttributes {
+                class: 62,
+                attributes: vec![4, 22],
+            }),
+        );
+    }
+
+    #[test]
+    fn test_parse_dec_mode_status_response() {
+        assert_eq!(
+            parse_event(b"\x1B[?2026;2$y", false).unwrap(),
+            terminal_response(TerminalResponse::DecModeStatus {
+                mode: 2026,
+                status: 2,
+            }),
+        );
+        assert_eq!(parse_event(b"\x1B[?2026;2$", false).unwrap(), None);
+        assert!(parse_event(b"\x1B[?2026$y", false).is_err());
+    }
+
+    #[test]
+    fn test_parse_xtsmgraphics_response() {
+        assert_eq!(
+            parse_event(b"\x1B[?1;0;256S", false).unwrap(),
+            terminal_response(TerminalResponse::XtSmGraphics {
+                item: 1,
+                status: 0,
+                values: vec![256],
+            }),
+        );
+        assert_eq!(parse_event(b"\x1B[?1;0;", false).unwrap(), None);
+        assert!(parse_event(b"\x1B[?1;S", false).is_err());
+    }
+
+    #[test]
+    fn test_parse_pixel_size_responses() {
+        assert_eq!(
+            parse_event(b"\x1B[4;720;1280t", false).unwrap(),
+            terminal_response(TerminalResponse::TextAreaSizePixels {
+                width: 1280,
+                height: 720,
+            }),
+        );
+        assert_eq!(
+            parse_event(b"\x1B[6;20;10t", false).unwrap(),
+            terminal_response(TerminalResponse::CellSizePixels {
+                width: 10,
+                height: 20,
+            }),
+        );
+        assert!(parse_event(b"\x1B[4;0;1280t", false).is_err());
+    }
+
+    #[test]
+    fn test_parse_kitty_graphics_response() {
+        assert_eq!(
+            parse_event(b"\x1B_Gi=31,p=7;OK\x1B\\", false).unwrap(),
+            terminal_response(TerminalResponse::KittyGraphics {
+                image_id: Some(31),
+                image_number: None,
+                placement_id: Some(7),
+                message: "OK".to_owned(),
+            }),
+        );
+        assert_eq!(parse_event(b"\x1B_Gi=31;OK", false).unwrap(), None);
+        assert!(parse_event(b"\x1B_Gp=7;OK\x1B\\", false).is_err());
+    }
+
+    #[test]
+    fn test_terminal_responses_are_bounded() {
+        let oversized = format!("\x1B_Gi=31;{}\x1B\\", "x".repeat(1_024));
+        assert!(parse_event(oversized.as_bytes(), false).is_err());
+
+        let too_many_parameters = format!(
+            "\x1B[?{}S",
+            std::iter::repeat_n("1", MAX_TERMINAL_RESPONSE_PARAMETERS + 1)
+                .collect::<Vec<_>>()
+                .join(";")
+        );
+        assert!(parse_event(too_many_parameters.as_bytes(), false).is_err());
     }
 }
