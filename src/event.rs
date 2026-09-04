@@ -1044,6 +1044,9 @@ bitflags! {
 pub struct KeyEvent {
     /// The key itself.
     pub code: KeyCode,
+    /// The primary key code reported by the Kitty keyboard protocol before
+    /// compatibility substitution of a shifted key code, if alternates are present.
+    pub primary_key_code: Option<KeyCode>,
     /// The shifted key code reported by the Kitty keyboard protocol, if present.
     pub shifted_key_code: Option<KeyCode>,
     /// The key at the same physical position in the standard PC-101 layout,
@@ -1068,6 +1071,7 @@ impl KeyEvent {
     pub const fn new(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
         KeyEvent {
             code,
+            primary_key_code: None,
             shifted_key_code: None,
             base_layout_key_code: None,
             modifiers,
@@ -1083,6 +1087,7 @@ impl KeyEvent {
     ) -> KeyEvent {
         KeyEvent {
             code,
+            primary_key_code: None,
             shifted_key_code: None,
             base_layout_key_code: None,
             modifiers,
@@ -1099,6 +1104,7 @@ impl KeyEvent {
     ) -> KeyEvent {
         KeyEvent {
             code,
+            primary_key_code: None,
             shifted_key_code: None,
             base_layout_key_code: None,
             modifiers,
@@ -1144,6 +1150,7 @@ impl From<KeyCode> for KeyEvent {
     fn from(code: KeyCode) -> Self {
         KeyEvent {
             code,
+            primary_key_code: None,
             shifted_key_code: None,
             base_layout_key_code: None,
             modifiers: KeyModifiers::empty(),
@@ -1157,6 +1164,7 @@ impl PartialEq for KeyEvent {
     fn eq(&self, other: &KeyEvent) -> bool {
         let KeyEvent {
             code: lhs_code,
+            primary_key_code: lhs_primary_key_code,
             shifted_key_code: lhs_shifted_key_code,
             base_layout_key_code: lhs_base_layout_key_code,
             modifiers: lhs_modifiers,
@@ -1165,6 +1173,7 @@ impl PartialEq for KeyEvent {
         } = self.normalize_case();
         let KeyEvent {
             code: rhs_code,
+            primary_key_code: rhs_primary_key_code,
             shifted_key_code: rhs_shifted_key_code,
             base_layout_key_code: rhs_base_layout_key_code,
             modifiers: rhs_modifiers,
@@ -1172,6 +1181,7 @@ impl PartialEq for KeyEvent {
             state: rhs_state,
         } = other.normalize_case();
         (lhs_code == rhs_code)
+            && (lhs_primary_key_code == rhs_primary_key_code)
             && (lhs_shifted_key_code == rhs_shifted_key_code)
             && (lhs_base_layout_key_code == rhs_base_layout_key_code)
             && (lhs_modifiers == rhs_modifiers)
@@ -1186,6 +1196,7 @@ impl Hash for KeyEvent {
     fn hash<H: Hasher>(&self, hash_state: &mut H) {
         let KeyEvent {
             code,
+            primary_key_code,
             shifted_key_code,
             base_layout_key_code,
             modifiers,
@@ -1193,6 +1204,7 @@ impl Hash for KeyEvent {
             state,
         } = self.normalize_case();
         code.hash(hash_state);
+        primary_key_code.hash(hash_state);
         shifted_key_code.hash(hash_state);
         base_layout_key_code.hash(hash_state);
         modifiers.hash(hash_state);

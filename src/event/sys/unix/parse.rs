@@ -780,6 +780,7 @@ pub(crate) fn parse_csi_u_encoded_key_code(buffer: &[u8]) -> io::Result<Option<I
     // the primary key code can be followed by the shifted key and the key at the same
     // physical position in the standard PC-101 layout. Preserve both values even though
     // the shifted value continues to replace the primary code for compatibility.
+    let primary_key_code = keycode;
     let shifted_key_code = codepoints
         .next()
         .and_then(|codepoint| codepoint.parse::<u32>().ok())
@@ -803,6 +804,9 @@ pub(crate) fn parse_csi_u_encoded_key_code(buffer: &[u8]) -> io::Result<Option<I
         kind,
         state_from_keycode | state_from_modifiers,
     );
+    if shifted_key_code.is_some() || base_layout_key_code.is_some() {
+        key_event.primary_key_code = Some(primary_key_code);
+    }
     key_event.shifted_key_code = shifted_key_code;
     key_event.base_layout_key_code = base_layout_key_code;
     let associated_text = split
@@ -1563,6 +1567,7 @@ mod tests {
         assert_eq!(
             parse_csi_u_encoded_key_code(b"\x1B[101:69:100;2u").unwrap(),
             Some(InternalEvent::Event(Event::Key(KeyEvent {
+                primary_key_code: Some(KeyCode::Char('e')),
                 shifted_key_code: Some(KeyCode::Char('E')),
                 base_layout_key_code: Some(KeyCode::Char('d')),
                 ..KeyEvent::new(KeyCode::Char('E'), KeyModifiers::NONE)
@@ -1572,6 +1577,7 @@ mod tests {
             parse_csi_u_encoded_key_code(b"\x1B[233::101;1:1;233u").unwrap(),
             Some(InternalEvent::Event(Event::KeyWithText(
                 KeyEvent {
+                    primary_key_code: Some(KeyCode::Char('é')),
                     base_layout_key_code: Some(KeyCode::Char('e')),
                     ..KeyEvent::new(KeyCode::Char('é'), KeyModifiers::NONE)
                 },
@@ -1593,6 +1599,7 @@ mod tests {
             parse_csi_u_encoded_key_code(b"\x1B[97:65;2:1;65u").unwrap(),
             Some(InternalEvent::Event(Event::KeyWithText(
                 KeyEvent {
+                    primary_key_code: Some(KeyCode::Char('a')),
                     shifted_key_code: Some(KeyCode::Char('A')),
                     ..KeyEvent::new(KeyCode::Char('A'), KeyModifiers::NONE)
                 },
@@ -1846,6 +1853,7 @@ mod tests {
             // A-S-9 is equivalent to A-(
             parse_event(b"\x1B[57:40;4u", false).unwrap(),
             Some(InternalEvent::Event(Event::Key(KeyEvent {
+                primary_key_code: Some(KeyCode::Char('9')),
                 shifted_key_code: Some(KeyCode::Char('(')),
                 ..KeyEvent::new(KeyCode::Char('('), KeyModifiers::ALT)
             }))),
@@ -1854,6 +1862,7 @@ mod tests {
             // A-S-minus is equivalent to A-_
             parse_event(b"\x1B[45:95;4u", false).unwrap(),
             Some(InternalEvent::Event(Event::Key(KeyEvent {
+                primary_key_code: Some(KeyCode::Char('-')),
                 shifted_key_code: Some(KeyCode::Char('_')),
                 ..KeyEvent::new(KeyCode::Char('_'), KeyModifiers::ALT)
             }))),
