@@ -1046,11 +1046,23 @@ pub struct KeyEvent {
     pub code: KeyCode,
     /// The primary key code reported by the Kitty keyboard protocol before
     /// compatibility substitution of a shifted key code, if alternates are present.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub primary_key_code: Option<KeyCode>,
     /// The shifted key code reported by the Kitty keyboard protocol, if present.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub shifted_key_code: Option<KeyCode>,
     /// The key at the same physical position in the standard PC-101 layout,
     /// as reported by the Kitty keyboard protocol, if present.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
     pub base_layout_key_code: Option<KeyCode>,
     /// Additional key modifiers.
     pub modifiers: KeyModifiers,
@@ -1761,6 +1773,35 @@ mod tests {
 
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         assert_eq!(modifiers.to_string(), "Shift+Control+Alt");
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn alternate_key_codes_preserve_serde_compatibility() {
+        let ordinary = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        let ordinary_value = serde_json::to_value(ordinary).unwrap();
+        assert!(ordinary_value.get("primary_key_code").is_none());
+        assert!(ordinary_value.get("shifted_key_code").is_none());
+        assert!(ordinary_value.get("base_layout_key_code").is_none());
+        assert_eq!(
+            serde_json::from_value::<KeyEvent>(ordinary_value).unwrap(),
+            ordinary
+        );
+
+        let alternate = KeyEvent {
+            primary_key_code: Some(KeyCode::Char('a')),
+            shifted_key_code: Some(KeyCode::Char('A')),
+            base_layout_key_code: Some(KeyCode::Char('q')),
+            ..ordinary
+        };
+        let alternate_value = serde_json::to_value(alternate).unwrap();
+        assert!(alternate_value.get("primary_key_code").is_some());
+        assert!(alternate_value.get("shifted_key_code").is_some());
+        assert!(alternate_value.get("base_layout_key_code").is_some());
+        assert_eq!(
+            serde_json::from_value::<KeyEvent>(alternate_value).unwrap(),
+            alternate
+        );
     }
 
     const ESC_PRESSED: KeyEvent =
