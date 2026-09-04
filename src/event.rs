@@ -294,7 +294,7 @@ bitflags! {
     ///
     /// Alternate keys and Unicode codepoints are not yet supported by crossterm.
     #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(transparent))]
-    #[derive(Debug, PartialOrd, PartialEq, Eq, Clone, Copy, Hash)]
+    #[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Clone, Copy, Hash)]
     pub struct KeyboardEnhancementFlags: u8 {
         /// Represent Escape and modified keys using CSI-u sequences, so they can be unambiguously
         /// read.
@@ -554,6 +554,11 @@ impl Command for PopKeyboardEnhancementFlags {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Clone, Hash)]
 pub enum TerminalResponse {
+    /// Progressive keyboard enhancement flags reported by the Kitty keyboard protocol.
+    KeyboardEnhancementFlags {
+        /// The terminal's currently active enhancement flags.
+        flags: KeyboardEnhancementFlags,
+    },
     /// Primary device attributes (`DA1`).
     PrimaryDeviceAttributes {
         /// The terminal's architectural class.

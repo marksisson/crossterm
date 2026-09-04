@@ -30,10 +30,10 @@ impl Filter for KeyboardEnhancementFlagsFilter {
         // progressive keyboard enhancement.
         matches!(
             event,
-            InternalEvent::KeyboardEnhancementFlags(_)
-                | InternalEvent::Event(Event::TerminalResponse(
-                    TerminalResponse::PrimaryDeviceAttributes { .. }
-                ))
+            InternalEvent::Event(Event::TerminalResponse(
+                TerminalResponse::KeyboardEnhancementFlags { .. }
+                    | TerminalResponse::PrimaryDeviceAttributes { .. }
+            ))
         )
     }
 }
@@ -105,11 +105,11 @@ mod tests {
     #[test]
     fn test_keyboard_enhancement_status_filter_filters_keyboard_enhancement_status() {
         assert!(!KeyboardEnhancementFlagsFilter.eval(&InternalEvent::Event(Event::Resize(10, 10))));
-        assert!(
-            KeyboardEnhancementFlagsFilter.eval(&InternalEvent::KeyboardEnhancementFlags(
-                crate::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-            ))
-        );
+        assert!(KeyboardEnhancementFlagsFilter.eval(&InternalEvent::Event(
+            Event::TerminalResponse(TerminalResponse::KeyboardEnhancementFlags {
+                flags: crate::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES,
+            })
+        )));
         assert!(KeyboardEnhancementFlagsFilter.eval(&InternalEvent::Event(
             Event::TerminalResponse(TerminalResponse::PrimaryDeviceAttributes {
                 class: 62,

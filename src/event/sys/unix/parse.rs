@@ -391,7 +391,9 @@ fn parse_csi_keyboard_enhancement_flags(buffer: &[u8]) -> io::Result<Option<Inte
         flags |= KeyboardEnhancementFlags::REPORT_ASSOCIATED_TEXT;
     }
 
-    Ok(Some(InternalEvent::KeyboardEnhancementFlags(flags)))
+    Ok(terminal_response(
+        TerminalResponse::KeyboardEnhancementFlags { flags },
+    ))
 }
 
 fn parse_csi_primary_device_attributes(buffer: &[u8]) -> io::Result<Option<InternalEvent>> {
@@ -1505,13 +1507,13 @@ mod tests {
     fn test_parse_keyboard_enhancement_flags() {
         assert_eq!(
             parse_event(b"\x1B[?31u", false).unwrap(),
-            Some(InternalEvent::KeyboardEnhancementFlags(
-                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+            terminal_response(TerminalResponse::KeyboardEnhancementFlags {
+                flags: KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
                     | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
                     | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
                     | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
                     | KeyboardEnhancementFlags::REPORT_ASSOCIATED_TEXT,
-            )),
+            }),
         );
         assert!(parse_event(b"\x1B[?invalidu", false).is_err());
     }

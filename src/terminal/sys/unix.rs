@@ -1,7 +1,7 @@
 //! UNIX related logic for terminal manipulation.
 
 #[cfg(feature = "events")]
-use crate::event::KeyboardEnhancementFlags;
+use crate::event::{Event, KeyboardEnhancementFlags, TerminalResponse};
 use crate::terminal::{
     WindowSize,
     sys::file_descriptor::{FileDesc, tty_fd},
@@ -243,28 +243,24 @@ fn query_keyboard_enhancement_flags_raw() -> io::Result<Option<KeyboardEnhanceme
         stdout.flush()?;
     }
 
-    loop {
-        match internal::poll(
-            Some(Duration::from_millis(2000)),
-            &KeyboardEnhancementFlagsFilter,
-        ) {
-            Ok(true) => {
-                match internal::read(&KeyboardEnhancementFlagsFilter) {
-                    Ok(InternalEvent::KeyboardEnhancementFlags(current_flags)) => {
-                        // Flush the PrimaryDeviceAttributes out of the event queue.
-                        internal::read(&PrimaryDeviceAttributesFilter).ok();
-                        return Ok(Some(current_flags));
-                    }
-                    _ => return Ok(None),
-                }
+    match internal::poll(
+        Some(Duration::from_millis(2000)),
+        &KeyboardEnhancementFlagsFilter,
+    ) {
+        Ok(true) => match internal::read(&KeyboardEnhancementFlagsFilter) {
+            Ok(InternalEvent::Event(Event::TerminalResponse(
+                TerminalResponse::KeyboardEnhancementFlags { flags },
+            ))) => {
+                // Flush the PrimaryDeviceAttributes out of the event queue.
+                internal::read(&PrimaryDeviceAttributesFilter).ok();
+                Ok(Some(flags))
             }
-            Ok(false) => {
-                return Err(io::Error::other(
-                    "The keyboard enhancement status could not be read within a normal duration",
-                ));
-            }
-            Err(_) => {}
-        }
+            _ => Ok(None),
+        },
+        Ok(false) => Err(io::Error::other(
+            "The keyboard enhancement status could not be read within a normal duration",
+        )),
+        Err(error) => Err(error),
     }
 }
 
