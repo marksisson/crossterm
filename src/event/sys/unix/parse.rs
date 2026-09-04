@@ -265,7 +265,10 @@ fn parse_csi_keyboard_enhancement_flags(buffer: &[u8]) -> io::Result<Option<Inte
         return Ok(None);
     }
 
-    let bits = buffer[3];
+    let bits = std::str::from_utf8(&buffer[3..buffer.len() - 1])
+        .map_err(|_| could_not_parse_event_error())?
+        .parse::<u8>()
+        .map_err(|_| could_not_parse_event_error())?;
     let mut flags = KeyboardEnhancementFlags::empty();
 
     if bits & 1 != 0 {
@@ -1314,6 +1317,21 @@ mod tests {
                 KeyModifiers::SHIFT
             )))),
         );
+    }
+
+    #[test]
+    fn test_parse_keyboard_enhancement_flags() {
+        assert_eq!(
+            parse_event(b"\x1B[?31u", false).unwrap(),
+            Some(InternalEvent::KeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_ASSOCIATED_TEXT,
+            )),
+        );
+        assert!(parse_event(b"\x1B[?invalidu", false).is_err());
     }
 
     #[test]
