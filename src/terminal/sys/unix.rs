@@ -213,7 +213,7 @@ fn query_keyboard_enhancement_flags_nonraw() -> io::Result<Option<KeyboardEnhanc
 #[cfg(feature = "events")]
 fn query_keyboard_enhancement_flags_raw() -> io::Result<Option<KeyboardEnhancementFlags>> {
     use crate::event::{
-        filter::{KeyboardEnhancementFlagsFilter, PrimaryDeviceAttributesFilter},
+        filter::KeyboardEnhancementFlagsFilter,
         internal::{self, InternalEvent},
     };
     use std::io::Write;
@@ -251,8 +251,8 @@ fn query_keyboard_enhancement_flags_raw() -> io::Result<Option<KeyboardEnhanceme
             Ok(InternalEvent::Event(Event::TerminalResponse(
                 TerminalResponse::KeyboardEnhancementFlags { flags },
             ))) => {
-                // Flush the PrimaryDeviceAttributes out of the event queue.
-                internal::read(&PrimaryDeviceAttributesFilter).ok();
+                // DA1 can arrive later or not at all. It is now a public terminal
+                // response, so leave it queued rather than blocking to discard it.
                 Ok(Some(flags))
             }
             _ => Ok(None),

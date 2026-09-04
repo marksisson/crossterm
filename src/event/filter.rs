@@ -38,22 +38,6 @@ impl Filter for KeyboardEnhancementFlagsFilter {
     }
 }
 
-#[cfg(unix)]
-#[derive(Debug, Clone)]
-pub(crate) struct PrimaryDeviceAttributesFilter;
-
-#[cfg(unix)]
-impl Filter for PrimaryDeviceAttributesFilter {
-    fn eval(&self, event: &InternalEvent) -> bool {
-        matches!(
-            event,
-            InternalEvent::Event(Event::TerminalResponse(
-                TerminalResponse::PrimaryDeviceAttributes { .. }
-            ))
-        )
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct TerminalResponseFilter;
 
@@ -84,7 +68,7 @@ mod tests {
     use super::{
         super::{Event, TerminalResponse},
         CursorPositionFilter, EventFilter, Filter, InternalEvent, KeyboardEnhancementFlagsFilter,
-        PrimaryDeviceAttributesFilter, TerminalResponseFilter,
+        TerminalResponseFilter,
     };
 
     #[derive(Debug, Clone)]
@@ -111,17 +95,6 @@ mod tests {
             })
         )));
         assert!(KeyboardEnhancementFlagsFilter.eval(&InternalEvent::Event(
-            Event::TerminalResponse(TerminalResponse::PrimaryDeviceAttributes {
-                class: 62,
-                attributes: vec![4],
-            })
-        )));
-    }
-
-    #[test]
-    fn test_primary_device_attributes_filter_filters_primary_device_attributes() {
-        assert!(!PrimaryDeviceAttributesFilter.eval(&InternalEvent::Event(Event::Resize(10, 10))));
-        assert!(PrimaryDeviceAttributesFilter.eval(&InternalEvent::Event(
             Event::TerminalResponse(TerminalResponse::PrimaryDeviceAttributes {
                 class: 62,
                 attributes: vec![4],
